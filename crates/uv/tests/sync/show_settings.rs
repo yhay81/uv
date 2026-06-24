@@ -3388,6 +3388,7 @@ fn preview_features() {
     +            IndexHashAlgorithm,
     +            LockfileFormatCheck,
     +            LockWithoutMetadata,
+    +            TarCodec,
     +        ],
          },
          python_preference: Managed,
