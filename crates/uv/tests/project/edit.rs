@@ -10773,6 +10773,330 @@ async fn add_index_with_non_existent_relative_path_with_same_name_as_index() -> 
     Ok(())
 }
 
+/// Resolve configured indexes by name without changing normal `uv add` persistence.
+#[test]
+fn add_index_by_name() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    let initial = indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [[tool.uv.index]]
+        name = "internal"
+        url = "https://test.pypi.org/simple"
+        explicit = true
+        default = true
+    "#};
+    pyproject_toml.write_str(initial)?;
+
+    // Without preview, a configured name is used only when no matching path exists.
+    uv_snapshot!(context.filters(), context.add()
+        .arg("iniconfig")
+        .arg("--index").arg("internal")
+        .arg("--frozen"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: Referencing an index by name is experimental and may change without warning. Pass `--preview-features index-by-name` to disable this warning.
+    ");
+
+    pyproject_toml.write_str(initial)?;
+
+    // Enabling preview suppresses the warning; existing add and source-pinning logic is unchanged.
+    uv_snapshot!(context.filters(), context.add()
+        .arg("iniconfig")
+        .arg("--index").arg("internal")
+        .arg("--preview-features").arg("index-by-name")
+        .arg("--frozen"), @"
+    exit_code: 0 (success)
+    ");
+
+    insta::with_settings!({
+        filters => context.filters(),
+    }, {
+        assert_snapshot!(context.read("pyproject.toml"), @r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = [
+            "iniconfig",
+        ]
+
+        [[tool.uv.index]]
+        name = "internal"
+        url = "https://test.pypi.org/simple"
+        explicit = true
+        default = true
+
+        [tool.uv.sources]
+        iniconfig = { index = "internal" }
+        "#);
+    });
+
+    Ok(())
+}
+
+/// Resolve named indexes provided through the environment in the same way as CLI arguments.
+#[test]
+fn add_index_by_name_environment_variables() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    let initial = indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [[tool.uv.index]]
+        name = "internal"
+        url = "https://test.pypi.org/simple"
+        explicit = true
+    "#};
+    pyproject_toml.write_str(initial)?;
+
+    uv_snapshot!(context.filters(), context.add()
+        .arg("iniconfig")
+        .arg("--preview-features").arg("index-by-name")
+        .arg("--frozen")
+        .env(EnvVars::UV_INDEX, "internal"), @"
+    exit_code: 0 (success)
+    ");
+
+    insta::with_settings!({
+        filters => context.filters(),
+    }, {
+        assert_snapshot!(context.read("pyproject.toml"), @r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = [
+            "iniconfig",
+        ]
+
+        [[tool.uv.index]]
+        name = "internal"
+        url = "https://test.pypi.org/simple"
+        explicit = true
+
+        [tool.uv.sources]
+        iniconfig = { index = "internal" }
+        "#);
+    });
+
+    pyproject_toml.write_str(initial)?;
+
+    uv_snapshot!(context.filters(), context.add()
+        .arg("iniconfig")
+        .arg("--preview-features").arg("index-by-name")
+        .arg("--frozen")
+        .env(EnvVars::UV_DEFAULT_INDEX, "internal"), @"
+    exit_code: 0 (success)
+    ");
+
+    insta::with_settings!({
+        filters => context.filters(),
+    }, {
+        assert_snapshot!(context.read("pyproject.toml"), @r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = [
+            "iniconfig",
+        ]
+
+        [[tool.uv.index]]
+        name = "internal"
+        url = "https://test.pypi.org/simple"
+        explicit = true
+        default = true
+
+        [tool.uv.sources]
+        iniconfig = { index = "internal" }
+        "#);
+    });
+
+    Ok(())
+}
+
+/// Missing bare names become missing-index errors only with the preview feature enabled.
+#[test]
+fn add_index_by_name_missing() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    let initial = indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#};
+    pyproject_toml.write_str(initial)?;
+
+    uv_snapshot!(context.filters(), context.add()
+        .arg("iniconfig")
+        .arg("--index").arg("missing")
+        .arg("--preview-features").arg("index-by-name"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Could not find an index named `missing`
+    ");
+
+    uv_snapshot!(context.filters(), context.add()
+        .arg("iniconfig")
+        .arg("--default-index").arg("missing")
+        .arg("--preview-features").arg("index-by-name"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Could not find an index named `missing`
+    ");
+
+    assert_eq!(context.read("pyproject.toml"), initial);
+
+    Ok(())
+}
+
+/// Preview flips an ambiguous bare value from an existing path to a configured index.
+#[test]
+fn add_index_by_name_directory_ambiguity() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let context = context.with_filter((r"\./|\.\\", r"[PREFIX]"));
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    let initial = indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [[tool.uv.index]]
+        name = "internal"
+        url = "https://test.pypi.org/simple"
+    "#};
+    pyproject_toml.write_str(initial)?;
+
+    let local_index = context.temp_dir.child("internal");
+    local_index.create_dir_all()?;
+    local_index.child("placeholder").touch()?;
+
+    // The non-preview command must keep the existing path and its existing ambiguity warning.
+    #[cfg(unix)]
+    uv_snapshot!(context.filters(), context.add()
+        .arg("iniconfig")
+        .arg("--index").arg("internal")
+        .arg("--frozen"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: Relative paths passed to `--index` or `--default-index` should be disambiguated from index names (use `[PREFIX]internal`). Support for ambiguous values will be removed in the future
+    ");
+
+    #[cfg(windows)]
+    uv_snapshot!(context.filters(), context.add()
+        .arg("iniconfig")
+        .arg("--index").arg("internal")
+        .arg("--frozen"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: Relative paths passed to `--index` or `--default-index` should be disambiguated from index names (use `[PREFIX]internal` or `[PREFIX]internal`). Support for ambiguous values will be removed in the future
+    ");
+
+    pyproject_toml.write_str(initial)?;
+
+    // With preview enabled, the configured index takes precedence over the same-named directory.
+    uv_snapshot!(context.filters(), context.add()
+        .arg("iniconfig")
+        .arg("--index").arg("internal")
+        .arg("--preview-features").arg("index-by-name")
+        .arg("--frozen"), @"
+    exit_code: 0 (success)
+    ");
+
+    insta::with_settings!({
+        filters => context.filters(),
+    }, {
+        assert_snapshot!(context.read("pyproject.toml"), @r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = [
+            "iniconfig",
+        ]
+
+        [[tool.uv.index]]
+        name = "internal"
+        url = "https://test.pypi.org/simple"
+
+        [tool.uv.sources]
+        iniconfig = { index = "internal" }
+        "#);
+    });
+
+    Ok(())
+}
+
+/// Named indexes are resolved from user-level configuration before normal add persistence.
+#[test]
+fn add_index_by_name_user_configuration() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+
+    let user_config = context.user_config_dir.child("uv");
+    user_config.create_dir_all()?;
+    user_config.child("uv.toml").write_str(indoc! {r#"
+        [[index]]
+        name = "internal"
+        url = "https://test.pypi.org/simple"
+        authenticate = "always"
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add()
+        .arg("iniconfig")
+        .arg("--index").arg("internal")
+        .arg("--preview-features").arg("index-by-name")
+        .arg("--frozen"), @"
+    exit_code: 0 (success)
+    ");
+
+    insta::with_settings!({
+        filters => context.filters(),
+    }, {
+        assert_snapshot!(context.read("pyproject.toml"), @r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = [
+            "iniconfig",
+        ]
+
+        [tool.uv.sources]
+        iniconfig = { index = "internal" }
+
+        [[tool.uv.index]]
+        name = "internal"
+        url = "https://test.pypi.org/simple"
+        "#);
+    });
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn add_index_empty_directory() -> Result<()> {
     let context = uv_test::test_context!("3.12");

@@ -75,6 +75,13 @@ use crate::commands::{
 /// The default publish URL.
 const PYPI_PUBLISH_URL: &str = "https://upload.pypi.org/legacy/";
 
+/// Return the indexes from the effective filesystem configuration.
+fn configured_indexes(filesystem: Option<&Options>) -> &[Index] {
+    filesystem
+        .and_then(|filesystem| filesystem.top_level.index.as_deref())
+        .unwrap_or_default()
+}
+
 /// The resolved global settings to use for any invocation of the CLI.
 #[derive(Debug, Clone)]
 pub(crate) struct GlobalSettings {
@@ -853,7 +860,11 @@ impl RunSettings {
             python_platform,
             refresh: Refresh::try_from(refresh)?,
             settings: ResolverInstallerSettings::combine(
-                resolver_installer_options(installer, build)?,
+                resolver_installer_options(
+                    installer,
+                    build,
+                    configured_indexes(filesystem.as_deref()),
+                )?,
                 filesystem,
                 &environment,
             ),
@@ -951,7 +962,11 @@ impl ToolRunSettings {
         let filesystem_options = filesystem.map(FilesystemOptions::into_options);
 
         let options = resolver_installer_options_with_environment(
-            resolver_installer_options(installer, build)?,
+            resolver_installer_options(
+                installer,
+                build,
+                configured_indexes(filesystem_options.as_ref()),
+            )?,
             &environment,
         )
         .combine(ResolverInstallerOptions::from(
@@ -1076,7 +1091,11 @@ impl ToolInstallSettings {
         let filesystem_options = filesystem.map(FilesystemOptions::into_options);
 
         let options = resolver_installer_options_with_environment(
-            resolver_installer_options(installer, build)?,
+            resolver_installer_options(
+                installer,
+                build,
+                configured_indexes(filesystem_options.as_ref()),
+            )?,
             &environment,
         )
         .combine(ResolverInstallerOptions::from(
@@ -1226,7 +1245,11 @@ impl ToolUpgradeSettings {
         };
 
         let args = resolver_installer_options_with_environment(
-            resolver_installer_options(installer, build)?,
+            resolver_installer_options(
+                installer,
+                build,
+                configured_indexes(filesystem.as_deref()),
+            )?,
             environment,
         );
         let filesystem = filesystem.map(FilesystemOptions::into_options);
@@ -1847,7 +1870,11 @@ impl SyncSettings {
 
         let malware_settings = MalwareCheckSettings::resolve(filesystem.as_ref(), &environment);
         let settings = ResolverInstallerSettings::combine(
-            resolver_installer_options(installer, build)?,
+            resolver_installer_options(
+                installer,
+                build,
+                configured_indexes(filesystem.as_deref()),
+            )?,
             filesystem,
             &environment,
         );
@@ -2042,7 +2069,7 @@ impl LockSettings {
             python: python.and_then(Maybe::into_option),
             refresh: Refresh::try_from(refresh)?,
             settings: ResolverSettings::combine(
-                resolver_options(resolver, build)?,
+                resolver_options(resolver, build, configured_indexes(filesystem.as_deref()))?,
                 filesystem,
                 &environment,
             ),
@@ -2148,7 +2175,7 @@ impl MetadataSettings {
             python: python.and_then(Maybe::into_option),
             refresh: Refresh::try_from(refresh)?,
             settings: ResolverSettings::combine(
-                resolver_options(resolver, build)?,
+                resolver_options(resolver, build, configured_indexes(filesystem.as_deref()))?,
                 filesystem,
                 &environment,
             ),
@@ -2301,7 +2328,8 @@ impl AddSettings {
         let index = indexes_from_args(
             installer.index_args.default_index.as_ref(),
             installer.index_args.index.as_deref(),
-        );
+            configured_indexes(filesystem.as_deref()),
+        )?;
         let indexes = index.clone().unwrap_or_default();
 
         // Warn user if an ambiguous relative path was passed as a value for
@@ -2541,7 +2569,11 @@ impl RemoveSettings {
             python: python.and_then(Maybe::into_option),
             refresh: Refresh::try_from(refresh)?,
             settings: ResolverInstallerSettings::combine(
-                resolver_installer_options(installer, build)?,
+                resolver_installer_options(
+                    installer,
+                    build,
+                    configured_indexes(filesystem.as_deref()),
+                )?,
                 filesystem,
                 &environment,
             ),
@@ -2630,7 +2662,11 @@ impl VersionSettings {
             python: python.and_then(Maybe::into_option),
             refresh: Refresh::try_from(refresh)?,
             settings: ResolverInstallerSettings::combine(
-                resolver_installer_options(installer, build)?,
+                resolver_installer_options(
+                    installer,
+                    build,
+                    configured_indexes(filesystem.as_deref()),
+                )?,
                 filesystem,
                 &environment,
             ),
@@ -2745,7 +2781,7 @@ impl TreeSettings {
             python_platform,
             python: python.and_then(Maybe::into_option),
             resolver: ResolverSettings::combine(
-                resolver_options(resolver, build)?,
+                resolver_options(resolver, build, configured_indexes(filesystem.as_deref()))?,
                 filesystem,
                 &environment,
             ),
@@ -2920,7 +2956,7 @@ impl ExportSettings {
             python: python.and_then(Maybe::into_option),
             refresh: Refresh::try_from(refresh)?,
             settings: ResolverSettings::combine(
-                resolver_options(resolver, build)?,
+                resolver_options(resolver, build, configured_indexes(filesystem.as_deref()))?,
                 filesystem,
                 &environment,
             ),
@@ -3057,7 +3093,11 @@ impl CheckSettings {
         );
         let malware_settings = MalwareCheckSettings::resolve(filesystem.as_ref(), &environment);
         let settings = ResolverInstallerSettings::combine(
-            resolver_installer_options(installer, build)?,
+            resolver_installer_options(
+                installer,
+                build,
+                configured_indexes(filesystem.as_deref()),
+            )?,
             filesystem,
             &environment,
         );
@@ -3195,7 +3235,7 @@ impl AuditSettings {
             python_version,
             python_platform,
             settings: ResolverSettings::combine(
-                resolver_options(resolver, build)?,
+                resolver_options(resolver, build, configured_indexes(filesystem.as_deref()))?,
                 filesystem,
                 &environment,
             ),
@@ -3456,7 +3496,7 @@ impl PipCompileSettings {
                     )?,
                     annotation_style,
                     torch_backend,
-                    ..PipOptions::try_from(resolver)?
+                    ..resolver.into_pip_options(configured_indexes(filesystem.as_deref()))?
                 },
                 filesystem,
                 environment,
@@ -3559,7 +3599,7 @@ impl PipSyncSettings {
                     all_extras: flag(all_extras, no_all_extras, "all-extras")?,
                     group: Some(group),
                     torch_backend,
-                    ..PipOptions::try_from(installer)?
+                    ..installer.into_pip_options(configured_indexes(filesystem.as_deref()))?
                 },
                 filesystem,
                 environment,
@@ -3742,7 +3782,7 @@ impl PipInstallSettings {
                     require_hashes: flag(require_hashes, no_require_hashes, "require-hashes")?,
                     verify_hashes: flag(verify_hashes, no_verify_hashes, "verify-hashes")?,
                     torch_backend,
-                    ..PipOptions::try_from(installer)?
+                    ..installer.into_pip_options(configured_indexes(filesystem.as_deref()))?
                 },
                 filesystem,
                 environment,
@@ -3904,7 +3944,7 @@ impl PipListSettings {
                     strict: flag(strict, no_strict, "strict")?,
                     target,
                     prefix,
-                    ..PipOptions::from(fetch)
+                    ..fetch.into_pip_options(configured_indexes(filesystem.as_deref()))?
                 },
                 filesystem,
                 environment,
@@ -4005,7 +4045,7 @@ impl PipTreeSettings {
                     python: python.and_then(Maybe::into_option),
                     system: flag(system, no_system, "system")?,
                     strict: flag(strict, no_strict, "strict")?,
-                    ..PipOptions::from(fetch)
+                    ..fetch.into_pip_options(configured_indexes(filesystem.as_deref()))?
                 },
                 filesystem,
                 environment,
@@ -4148,7 +4188,7 @@ impl BuildSettings {
             python: python.and_then(Maybe::into_option),
             refresh: Refresh::try_from(refresh)?,
             settings: ResolverSettings::combine(
-                resolver_options(resolver, build)?,
+                resolver_options(resolver, build, configured_indexes(filesystem.as_deref()))?,
                 filesystem,
                 &environment,
             ),
@@ -4254,7 +4294,7 @@ impl VenvSettings {
                     exclude_newer_package: exclude_newer_package
                         .map(ExcludeNewerPackage::from_iter),
                     link_mode,
-                    ..PipOptions::from(index_args)
+                    ..index_args.into_pip_options(configured_indexes(filesystem.as_deref()))?
                 },
                 filesystem,
                 environment,

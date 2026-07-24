@@ -321,6 +321,8 @@ pub enum PreviewFeature {
     IndexHashAlgorithm = 1 << 39,
     /// Rejects non-canonical lockfile formatting when using `--locked` or `--check`.
     LockfileFormatCheck = 1 << 40,
+    /// Allows selecting configured package indexes by name with `--index` and `--default-index`.
+    IndexByName = 1 << 41,
 }
 
 impl Display for PreviewFeature {

@@ -3042,6 +3042,88 @@ fn index_priority() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Named index arguments must resolve identically to their explicit CLI spellings.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn index_by_name() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("uv.toml")
+        .write_str(indoc::indoc! {r#"
+        [[index]]
+        name = "internal"
+        url = "https://test.pypi.org/simple"
+        explicit = true
+        default = true
+    "#})?;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("iniconfig")?;
+
+    let index = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.pip_compile())
+            .arg("requirements.in")
+            .arg("--show-settings")
+            .arg("--index")
+            .arg("internal")
+            .arg("--preview-features")
+            .arg("index-by-name")
+    );
+
+    // Selecting a name must produce the same implicit CLI index as spelling out its URL.
+    diff_uv_snapshot!(context.filters(), &index, add_shared_args(context.pip_compile())
+        .arg("requirements.in")
+        .arg("--show-settings")
+        .arg("--index")
+        .arg("internal=https://test.pypi.org/simple")
+        .arg("--preview-features")
+        .arg("index-by-name"), @"");
+
+    // `UV_INDEX` must follow the same name resolution and CLI-priority rules.
+    diff_uv_snapshot!(context.filters(), &index, add_shared_args(context.pip_compile())
+        .arg("requirements.in")
+        .arg("--show-settings")
+        .env(EnvVars::UV_INDEX, "internal")
+        .arg("--preview-features")
+        .arg("index-by-name"), @"");
+
+    let default_index = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.pip_compile())
+            .arg("requirements.in")
+            .arg("--show-settings")
+            .arg("--default-index")
+            .arg("internal")
+            .arg("--preview-features")
+            .arg("index-by-name")
+    );
+
+    // Selecting a default by name must match the existing explicit default-index spelling.
+    diff_uv_snapshot!(context.filters(), &default_index, add_shared_args(context.pip_compile())
+        .arg("requirements.in")
+        .arg("--show-settings")
+        .arg("--default-index")
+        .arg("internal=https://test.pypi.org/simple")
+        .arg("--preview-features")
+        .arg("index-by-name"), @"");
+
+    // `UV_DEFAULT_INDEX` must select the same configured index as `--default-index`.
+    diff_uv_snapshot!(context.filters(), &default_index, add_shared_args(context.pip_compile())
+        .arg("requirements.in")
+        .arg("--show-settings")
+        .env(EnvVars::UV_DEFAULT_INDEX, "internal")
+        .arg("--preview-features")
+        .arg("index-by-name"), @"");
+
+    Ok(())
+}
+
 /// Verify hashes by default.
 #[test]
 #[cfg_attr(
@@ -3226,6 +3308,7 @@ fn preview_features() {
     +            NoDistutilsPatch,
     +            IndexHashAlgorithm,
     +            LockfileFormatCheck,
+    +            IndexByName,
     +        ],
          },
          python_preference: Managed,
