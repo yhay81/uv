@@ -4723,7 +4723,7 @@ fn prerelease_base_marker_stable_preference_explicit_first() -> Result<()> {
         name = "c"
         version = "1.0.0"
         source = { registry = "http://[LOCALHOST]/simple/" }
-        sdist = { url = "http://[LOCALHOST]/files/c-1.0.0.tar.gz", hash = "sha256:6e14a2e7cc6be61fa5aa41c0e55beff8b708a3aea257fed948306a0741bb5c47", upload-time = "2024-03-24T00:00:00Z" }
+        sdist = { url = "http://[LOCALHOST]/files/c-1.0.0.tar.gz", hash = "sha256:699a07ff61aab66fcba4883a94c6d2b61afb7797fa956ae36f2efdf30d9dfbc7", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
             { url = "http://[LOCALHOST]/files/c-1.0.0-py3-none-any.whl", hash = "sha256:78c0da7c5681d751d38b2e60c78d1e29d6125d91e68e5aeb22372fa66527ff95", upload-time = "2024-03-24T00:00:00Z" },
         ]
@@ -4826,7 +4826,7 @@ fn prerelease_base_marker_stable_preference_plain_first() -> Result<()> {
         name = "c"
         version = "1.0.0"
         source = { registry = "http://[LOCALHOST]/simple/" }
-        sdist = { url = "http://[LOCALHOST]/files/c-1.0.0.tar.gz", hash = "sha256:6e14a2e7cc6be61fa5aa41c0e55beff8b708a3aea257fed948306a0741bb5c47", upload-time = "2024-03-24T00:00:00Z" }
+        sdist = { url = "http://[LOCALHOST]/files/c-1.0.0.tar.gz", hash = "sha256:699a07ff61aab66fcba4883a94c6d2b61afb7797fa956ae36f2efdf30d9dfbc7", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
             { url = "http://[LOCALHOST]/files/c-1.0.0-py3-none-any.whl", hash = "sha256:78c0da7c5681d751d38b2e60c78d1e29d6125d91e68e5aeb22372fa66527ff95", upload-time = "2024-03-24T00:00:00Z" },
         ]
@@ -4925,7 +4925,7 @@ fn prerelease_marker_equivalent_stable_preference() -> Result<()> {
         name = "c"
         version = "1.0.0"
         source = { registry = "http://[LOCALHOST]/simple/" }
-        sdist = { url = "http://[LOCALHOST]/files/c-1.0.0.tar.gz", hash = "sha256:6e14a2e7cc6be61fa5aa41c0e55beff8b708a3aea257fed948306a0741bb5c47", upload-time = "2024-03-24T00:00:00Z" }
+        sdist = { url = "http://[LOCALHOST]/files/c-1.0.0.tar.gz", hash = "sha256:699a07ff61aab66fcba4883a94c6d2b61afb7797fa956ae36f2efdf30d9dfbc7", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
             { url = "http://[LOCALHOST]/files/c-1.0.0-py3-none-any.whl", hash = "sha256:78c0da7c5681d751d38b2e60c78d1e29d6125d91e68e5aeb22372fa66527ff95", upload-time = "2024-03-24T00:00:00Z" },
         ]
@@ -5043,7 +5043,7 @@ fn prerelease_marker_stable_preference_backtracks() -> Result<()> {
         dependencies = [
             { name = "c", marker = "sys_platform == 'linux'" },
         ]
-        sdist = { url = "http://[LOCALHOST]/files/a-1.0.0.tar.gz", hash = "sha256:847f294d80290ab0a808ef8b68cb24d1183467244beae37ff7acd36bba5e3402", upload-time = "2024-03-24T00:00:00Z" }
+        sdist = { url = "http://[LOCALHOST]/files/a-1.0.0.tar.gz", hash = "sha256:3af88a63bb82356a9dc643e557148dd6a50d20b0f74ee15828c7ba066be890cb", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
             { url = "http://[LOCALHOST]/files/a-1.0.0-py3-none-any.whl", hash = "sha256:e5c939c5714630ae301b70dc2ba362c40f3ad6608cbc85035ee2c65be1f6ad70", upload-time = "2024-03-24T00:00:00Z" },
         ]
@@ -5052,7 +5052,7 @@ fn prerelease_marker_stable_preference_backtracks() -> Result<()> {
         name = "c"
         version = "1.0.0"
         source = { registry = "http://[LOCALHOST]/simple/" }
-        sdist = { url = "http://[LOCALHOST]/files/c-1.0.0.tar.gz", hash = "sha256:6e14a2e7cc6be61fa5aa41c0e55beff8b708a3aea257fed948306a0741bb5c47", upload-time = "2024-03-24T00:00:00Z" }
+        sdist = { url = "http://[LOCALHOST]/files/c-1.0.0.tar.gz", hash = "sha256:699a07ff61aab66fcba4883a94c6d2b61afb7797fa956ae36f2efdf30d9dfbc7", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
             { url = "http://[LOCALHOST]/files/c-1.0.0-py3-none-any.whl", hash = "sha256:78c0da7c5681d751d38b2e60c78d1e29d6125d91e68e5aeb22372fa66527ff95", upload-time = "2024-03-24T00:00:00Z" },
         ]
@@ -5061,7 +5061,7 @@ fn prerelease_marker_stable_preference_backtracks() -> Result<()> {
         name = "d"
         version = "1.0.0"
         source = { registry = "http://[LOCALHOST]/simple/" }
-        sdist = { url = "http://[LOCALHOST]/files/d-1.0.0.tar.gz", hash = "sha256:4f363304bad30565286697b70b1b48e348267d318562a3afb36af66a8a8cad1d", upload-time = "2024-03-24T00:00:00Z" }
+        sdist = { url = "http://[LOCALHOST]/files/d-1.0.0.tar.gz", hash = "sha256:bbb9d05b6de19e47de8e49fcc69483e76cd868bd556c8173680756d53e6997d4", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
             { url = "http://[LOCALHOST]/files/d-1.0.0-py3-none-any.whl", hash = "sha256:362166e5bd895367cc4ba5b7327949b7d417fe30cb3273a76b5db4a280dac05d", upload-time = "2024-03-24T00:00:00Z" },
         ]
@@ -5169,7 +5169,7 @@ fn transitive_prerelease_forks() -> Result<()> {
             { name = "c", version = "1.0.0", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "sys_platform != 'linux'" },
             { name = "c", version = "2.0.0b1", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "sys_platform == 'linux'" },
         ]
-        sdist = { url = "http://[LOCALHOST]/files/a-1.0.0.tar.gz", hash = "sha256:2d3e3f46d2ff4afceeec095a0799195534a719527d94152663853b00f6462bd2", upload-time = "2024-03-24T00:00:00Z" }
+        sdist = { url = "http://[LOCALHOST]/files/a-1.0.0.tar.gz", hash = "sha256:70f26f0ea30b0899e8c0e946a6b2c4d57dd4208a028da1a990cde29f4eed5d77", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
             { url = "http://[LOCALHOST]/files/a-1.0.0-py3-none-any.whl", hash = "sha256:392d0dd8be953713399938d2dacc8a361d99eb376285adfa4f0f0e4d448ace2a", upload-time = "2024-03-24T00:00:00Z" },
         ]
@@ -5181,7 +5181,7 @@ fn transitive_prerelease_forks() -> Result<()> {
         resolution-markers = [
             "sys_platform != 'linux'",
         ]
-        sdist = { url = "http://[LOCALHOST]/files/c-1.0.0.tar.gz", hash = "sha256:6e14a2e7cc6be61fa5aa41c0e55beff8b708a3aea257fed948306a0741bb5c47", upload-time = "2024-03-24T00:00:00Z" }
+        sdist = { url = "http://[LOCALHOST]/files/c-1.0.0.tar.gz", hash = "sha256:699a07ff61aab66fcba4883a94c6d2b61afb7797fa956ae36f2efdf30d9dfbc7", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
             { url = "http://[LOCALHOST]/files/c-1.0.0-py3-none-any.whl", hash = "sha256:78c0da7c5681d751d38b2e60c78d1e29d6125d91e68e5aeb22372fa66527ff95", upload-time = "2024-03-24T00:00:00Z" },
         ]
@@ -5193,7 +5193,7 @@ fn transitive_prerelease_forks() -> Result<()> {
         resolution-markers = [
             "sys_platform == 'linux'",
         ]
-        sdist = { url = "http://[LOCALHOST]/files/c-2.0.0b1.tar.gz", hash = "sha256:6c4537b683c9ac2640452883415184b7615e6a0675bbbd49c2e019b307df02e7", upload-time = "2024-03-24T00:00:00Z" }
+        sdist = { url = "http://[LOCALHOST]/files/c-2.0.0b1.tar.gz", hash = "sha256:0d71a5a80e03d71f520e78b06ca94b2f90247332e39c7b90233591fc33797e36", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
             { url = "http://[LOCALHOST]/files/c-2.0.0b1-py3-none-any.whl", hash = "sha256:4afb52babcf2d595eccb483f1b6a641ca25daa2015cd97c519eb9357cc9d69a7", upload-time = "2024-03-24T00:00:00Z" },
         ]

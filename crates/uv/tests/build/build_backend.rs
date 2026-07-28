@@ -602,7 +602,7 @@ fn build_sdist_with_long_path() -> Result<()> {
         .arg(default_dir.path().join("foo-1.0.0.tar.gz")), @"
     exit_code: 0 (success)
     ----- stdout -----
-    GNU members: 9
+    GNU members: 10
     ");
 
     uv_snapshot!(context

@@ -5659,12 +5659,12 @@ fn pep_751_validates_remote_archive_size() -> Result<()> {
 
     uv_snapshot!(context.filters(), context.pip_sync()
         .arg("--preview")
-        .arg("pylock.toml"), @r#"
+        .arg("pylock.toml"), @"
     exit_code: 1 (failure)
     ----- stderr -----
       × Failed to download and build `a==1.0.0`
-      ╰─▶ Size mismatch for `a==1.0.0`: expected 1 bytes, but downloaded 453 bytes
-    "#);
+      ╰─▶ Size mismatch for `a==1.0.0`: expected 1 bytes, but downloaded 607 bytes
+    ");
 
     Ok(())
 }
