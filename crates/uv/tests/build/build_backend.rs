@@ -649,7 +649,7 @@ fn build_sdist_with_long_path() -> Result<()> {
         .arg(format!("foo-1.0.0/{large_path}")), @"
     exit_code: 0 (success)
     ----- stdout -----
-    PAX members: 9
+    PAX members: 10
     Long path bytes: 133
     Streamed bytes: 5242881
     ");
