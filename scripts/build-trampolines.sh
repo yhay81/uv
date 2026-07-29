@@ -21,9 +21,11 @@ TOOLCHAIN="$(grep '^channel' "$TRAMPOLINE_DIR/rust-toolchain.toml" | sed 's/.*"\
 # toolchain hardcoded in the Dockerfile, regardless of the host architecture.
 PLATFORM="linux/amd64"
 
-# Build the pinned toolchain image.
+# Build the pinned toolchain image. The toolchain is passed in from
+# `rust-toolchain.toml` so that the image cannot drift from the crate.
 docker buildx build -t uv-trampoline-builder --load \
     --platform "$PLATFORM" \
+    --build-arg RUST_NIGHTLY="$TOOLCHAIN" \
     -f "$TRAMPOLINE_DIR/Dockerfile" "$TRAMPOLINE_DIR" \
     "$@"
 

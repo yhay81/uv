@@ -6,7 +6,9 @@
 
 ARG UBUNTU_SNAPSHOT=20260127T200000Z
 
-ARG RUST_NIGHTLY=nightly-2025-11-02
+# Keep in sync with `crates/uv-trampoline/rust-toolchain.toml`.
+# `scripts/build-trampolines.sh` overrides this with the value from that file.
+ARG RUST_NIGHTLY=nightly-2026-01-21
 
 ARG CARGO_XWIN_VERSION=0.21.4
 ARG XWIN_SDK_VERSION=10.0.22621
