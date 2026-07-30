@@ -8,8 +8,8 @@ use uv_cache_info::CacheInfo;
 use uv_distribution_filename::WheelFilename;
 use uv_distribution_types::{
     BuildInfo, BuildVariables, CachedRegistryDist, ConfigSettings, ExtraBuildRequirement,
-    ExtraBuildRequires, ExtraBuildVariables, Hashed, Index, IndexLocations, IndexUrl,
-    PackageConfigSettings, RegistryBuiltDist, RegistrySourceDist,
+    ExtraBuildRequires, ExtraBuildVariables, Hashed, Index, IndexFormat, IndexLocations,
+    IndexRoutes, IndexUrl, PackageConfigSettings, RegistryBuiltDist, RegistrySourceDist,
 };
 use uv_fs::{directories, files};
 use uv_normalize::PackageName;
@@ -90,6 +90,7 @@ pub struct RegistryWheelIndex<'a> {
     cache: &'a Cache,
     tags: &'a Tags,
     index_locations: &'a IndexLocations,
+    routes: Option<IndexRoutes>,
     hasher: &'a HashStrategy,
     index: FxHashMap<&'a PackageName, Vec<IndexEntry<'a>>>,
     config_settings: &'a ConfigSettings,
@@ -114,6 +115,7 @@ impl<'a> RegistryWheelIndex<'a> {
             cache,
             tags,
             index_locations,
+            routes: IndexRoutes::try_from(index_locations).ok(),
             hasher,
             config_settings,
             config_settings_package,
@@ -174,6 +176,7 @@ impl<'a> RegistryWheelIndex<'a> {
                 self.cache,
                 self.tags,
                 self.index_locations,
+                self.routes.as_ref(),
                 self.hasher,
                 self.config_settings,
                 self.config_settings_package,
@@ -189,12 +192,17 @@ impl<'a> RegistryWheelIndex<'a> {
         cache: &Cache,
         tags: &Tags,
         index_locations: &'index IndexLocations,
+        routes: Option<&IndexRoutes>,
         hasher: &HashStrategy,
         config_settings: &ConfigSettings,
         config_settings_package: &PackageConfigSettings,
         extra_build_requires: &ExtraBuildRequires,
         extra_build_variables: &ExtraBuildVariables,
     ) -> Vec<IndexEntry<'index>> {
+        let Some(routes) = routes else {
+            return Vec::new();
+        };
+
         let mut entries = vec![];
 
         let mut seen = FxHashSet::default();
@@ -203,16 +211,22 @@ impl<'a> RegistryWheelIndex<'a> {
                 continue;
             }
 
+            let route = routes.route_for(index.url());
+            let physical_index = match index.format {
+                IndexFormat::Simple => &route.physical,
+                IndexFormat::Flat => index.url(),
+            };
+
             // Index all the wheels that were downloaded directly from the registry.
             let wheel_dir = cache.shard(
                 CacheBucket::Wheels,
-                WheelCache::Index(index.url()).wheel_dir(package.as_ref()),
+                WheelCache::Index(physical_index).wheel_dir(package.as_ref()),
             );
 
             // For registry wheels, the cache structure is: `<index>/<package-name>/<wheel>.http`
             // or `<index>/<package-name>/<version>/<wheel>.rev`.
             for file in files(&wheel_dir).ok().into_iter().flatten() {
-                match index.url() {
+                match physical_index {
                     // Add files from remote registries.
                     IndexUrl::Pypi(_) | IndexUrl::Url(_) => {
                         if file
@@ -274,7 +288,7 @@ impl<'a> RegistryWheelIndex<'a> {
             // from the registry.
             let cache_shard = cache.shard(
                 CacheBucket::SourceDistributions,
-                WheelCache::Index(index.url()).wheel_dir(package.as_ref()),
+                WheelCache::Index(physical_index).wheel_dir(package.as_ref()),
             );
 
             // For registry source distributions, the cache structure is: `<index>/<package-name>/<version>/`.
@@ -282,7 +296,7 @@ impl<'a> RegistryWheelIndex<'a> {
                 let cache_shard = cache_shard.shard(shard);
 
                 // Read the revision from the cache.
-                let revision = match index.url() {
+                let revision = match physical_index {
                     // Add files from remote registries.
                     IndexUrl::Pypi(_) | IndexUrl::Url(_) => {
                         let revision_entry = cache_shard.entry(HTTP_REVISION);

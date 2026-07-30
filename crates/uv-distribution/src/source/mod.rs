@@ -26,7 +26,7 @@ use uv_cache::{Cache, CacheBucket, CacheEntry, CacheShard, Removal, WheelCache};
 use uv_cache_info::CacheInfo;
 use uv_client::{
     BaseClientBuilder, CacheControl, CachedClientError, Connectivity, DataWithCachePolicy,
-    RegistryClient,
+    ErrorKind as ClientErrorKind, RegistryClient,
 };
 use uv_configuration::{BuildKind, BuildOutput, NoSources};
 use uv_distribution_filename::{SourceDistExtension, WheelFilename};
@@ -213,6 +213,68 @@ pub(crate) struct SourceDistributionBuilder<'a, T: BuildContext> {
     reporter: Option<Arc<dyn Reporter>>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct SourceHashPolicy<'a> {
+    required: HashPolicy<'a>,
+    validation: Option<&'a [HashDigest]>,
+}
+
+impl<'a> SourceHashPolicy<'a> {
+    fn new(required: HashPolicy<'a>, validation: Option<&'a HashDigests>) -> Self {
+        Self {
+            required,
+            validation: validation.map(HashDigests::as_slice),
+        }
+    }
+
+    fn http_algorithms(self) -> Vec<HashAlgorithm> {
+        let mut algorithms = http_hash_algorithms(self.required);
+        if let Some(validation) = self.validation {
+            algorithms.extend(validation.iter().map(HashDigest::algorithm));
+        }
+        algorithms.sort_unstable();
+        algorithms.dedup();
+        algorithms
+    }
+
+    fn admits_cached_revision(self, revision: &impl Hashed) -> bool {
+        self.validation
+            .is_none_or(|hashes| revision.satisfies(HashPolicy::Any(hashes)))
+            && revision.has_digests(self.required)
+    }
+
+    fn validate_artifact(
+        self,
+        source: &BuildableSource<'_>,
+        hashes: &[HashDigest],
+    ) -> Result<(), Error> {
+        if let Some(validation) = self.validation
+            && !HashPolicy::Any(validation).matches(hashes)
+        {
+            return Err(Error::hash_mismatch(source.to_string(), validation, hashes));
+        }
+        Ok(())
+    }
+
+    fn validate(self, source: &BuildableSource<'_>, hashes: &impl Hashed) -> Result<(), Error> {
+        self.validate_artifact(source, hashes.hashes())?;
+        if !hashes.satisfies(self.required) {
+            return Err(Error::hash_mismatch(
+                source.to_string(),
+                self.required.digests(),
+                hashes.hashes(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl<'a> From<HashPolicy<'a>> for SourceHashPolicy<'a> {
+    fn from(required: HashPolicy<'a>) -> Self {
+        Self::new(required, None)
+    }
+}
+
 /// The name of the file that contains the revision ID for a remote distribution, encoded via `MsgPack`.
 pub(crate) const HTTP_REVISION: &str = "revision.http";
 
@@ -266,16 +328,20 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
     ) -> Result<BuiltWheelMetadata, Error> {
         let built_wheel_metadata = match &source {
             BuildableSource::Dist(SourceDist::Registry(dist)) => {
+                let route = client.unmanaged.routes().route_for(&dist.index);
+
                 // For registry source distributions, shard by package, then version, for
                 // convenience in debugging.
                 let cache_shard = self.build_context.cache().shard(
                     CacheBucket::SourceDistributions,
-                    WheelCache::Index(&dist.index)
+                    WheelCache::Index(&route.physical)
                         .wheel_dir(dist.name.as_ref())
                         .join(dist.version.to_string()),
                 );
 
-                let url = dist.file.url.to_url()?;
+                let url = route
+                    .to_proxy_url(&dist.file.url.to_url()?)
+                    .map_err(|err| Error::Client(ClientErrorKind::ProxyIndex(err).into()))?;
 
                 // If the URL is a file URL, use the local path directly.
                 if url.scheme() == "file" {
@@ -301,12 +367,16 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 self.url(
                     source,
                     &url,
-                    Some(&dist.index),
+                    Some(&route.physical),
                     &cache_shard,
                     None,
                     dist.ext,
                     tags,
-                    hashes,
+                    SourceHashPolicy::new(
+                        hashes,
+                        (route.is_proxy() && !dist.file.hashes.is_empty())
+                            .then_some(&dist.file.hashes),
+                    ),
                     client,
                 )
                 .boxed_local()
@@ -327,7 +397,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                     dist.subdirectory.as_deref(),
                     dist.ext,
                     tags,
-                    hashes,
+                    hashes.into(),
                     client,
                 )
                 .boxed_local()
@@ -384,7 +454,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                     resource.subdirectory,
                     resource.ext,
                     tags,
-                    hashes,
+                    hashes.into(),
                     client,
                 )
                 .boxed_local()
@@ -430,15 +500,19 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
     ) -> Result<ArchiveMetadata, Error> {
         let metadata = match &source {
             BuildableSource::Dist(SourceDist::Registry(dist)) => {
+                let route = client.unmanaged.routes().route_for(&dist.index);
+
                 // For registry source distributions, shard by package, then version.
                 let cache_shard = self.build_context.cache().shard(
                     CacheBucket::SourceDistributions,
-                    WheelCache::Index(&dist.index)
+                    WheelCache::Index(&route.physical)
                         .wheel_dir(dist.name.as_ref())
                         .join(dist.version.to_string()),
                 );
 
-                let url = dist.file.url.to_url()?;
+                let url = route
+                    .to_proxy_url(&dist.file.url.to_url()?)
+                    .map_err(|err| Error::Client(ClientErrorKind::ProxyIndex(err).into()))?;
 
                 // If the URL is a file URL, use the local path directly.
                 if url.scheme() == "file" {
@@ -463,11 +537,15 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 self.url_metadata(
                     source,
                     &url,
-                    Some(&dist.index),
+                    Some(&route.physical),
                     &cache_shard,
                     None,
                     dist.ext,
-                    hashes,
+                    SourceHashPolicy::new(
+                        hashes,
+                        (route.is_proxy() && !dist.file.hashes.is_empty())
+                            .then_some(&dist.file.hashes),
+                    ),
                     client,
                 )
                 .boxed_local()
@@ -487,7 +565,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                     &cache_shard,
                     dist.subdirectory.as_deref(),
                     dist.ext,
-                    hashes,
+                    hashes.into(),
                     client,
                 )
                 .boxed_local()
@@ -542,7 +620,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                     &cache_shard,
                     resource.subdirectory,
                     resource.ext,
-                    hashes,
+                    hashes.into(),
                     client,
                 )
                 .boxed_local()
@@ -631,7 +709,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         subdirectory: Option<&'data Path>,
         ext: SourceDistExtension,
         tags: &Tags,
-        hashes: HashPolicy<'_>,
+        hashes: SourceHashPolicy<'_>,
         client: &ManagedClient<'_>,
     ) -> Result<BuiltWheelMetadata, Error> {
         let _lock = cache_shard.lock().await.map_err(Error::CacheLock)?;
@@ -642,13 +720,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .await?;
 
         // Before running the build, check that the hashes match.
-        if !revision.satisfies(hashes) {
-            return Err(Error::hash_mismatch(
-                source.to_string(),
-                hashes.digests(),
-                revision.hashes(),
-            ));
-        }
+        hashes.validate(source, &revision)?;
 
         // Scope all operations to the revision. Within the revision, there's no need to check for
         // freshness, since entries have to be fresher than the revision itself.
@@ -764,7 +836,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         cache_shard: &CacheShard,
         subdirectory: Option<&'data Path>,
         ext: SourceDistExtension,
-        hashes: HashPolicy<'_>,
+        hashes: SourceHashPolicy<'_>,
         client: &ManagedClient<'_>,
     ) -> Result<ArchiveMetadata, Error> {
         let _lock = cache_shard.lock().await.map_err(Error::CacheLock)?;
@@ -775,13 +847,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .await?;
 
         // Before running the build, check that the hashes match.
-        if !revision.satisfies(hashes) {
-            return Err(Error::hash_mismatch(
-                source.to_string(),
-                hashes.digests(),
-                revision.hashes(),
-            ));
-        }
+        hashes.validate(source, &revision)?;
 
         // Scope all operations to the revision. Within the revision, there's no need to check for
         // freshness, since entries have to be fresher than the revision itself.
@@ -948,7 +1014,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         url: &DisplaySafeUrl,
         index: Option<&IndexUrl>,
         cache_shard: &CacheShard,
-        hashes: HashPolicy<'_>,
+        hashes: SourceHashPolicy<'_>,
         client: &ManagedClient<'_>,
     ) -> Result<Revision, Error> {
         let cache_entry = cache_shard.entry(HTTP_REVISION);
@@ -982,13 +1048,13 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 // Download the source distribution.
                 debug!("Downloading source distribution: {source}");
                 let entry = cache_shard.shard(revision.id()).entry(SOURCE);
-                let algorithms = http_hash_algorithms(hashes);
-                let (hashes, size) = self
-                    .download_archive(response, source, ext, entry.path(), &algorithms)
+                let algorithms = hashes.http_algorithms();
+                let (computed_hashes, size) = self
+                    .download_archive(response, source, ext, entry.path(), &algorithms, hashes)
                     .await?;
 
                 Ok(revision
-                    .with_hashes(HashDigests::from(hashes))
+                    .with_hashes(HashDigests::from(computed_hashes))
                     .with_size(size))
             }
             .boxed_local()
@@ -1028,7 +1094,9 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         }
 
         // If the archive is missing the required hashes or size, force a refresh.
-        if revision.has_digests(hashes) && (expected_size.is_none() || revision.size().is_some()) {
+        if hashes.admits_cached_revision(&revision)
+            && (expected_size.is_none() || revision.size().is_some())
+        {
             Ok(revision)
         } else {
             client
@@ -2739,7 +2807,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         index: Option<&IndexUrl>,
         entry: &CacheEntry,
         revision: Revision,
-        hashes: HashPolicy<'_>,
+        hashes: SourceHashPolicy<'_>,
         client: &ManagedClient<'_>,
     ) -> Result<Revision, Error> {
         warn!("Re-downloading missing source distribution: {source}");
@@ -2769,7 +2837,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             async {
                 // Take the union of the requested and existing hash algorithms.
                 let algorithms = {
-                    let mut algorithms = http_hash_algorithms(hashes);
+                    let mut algorithms = hashes.http_algorithms();
                     for digest in revision.hashes() {
                         algorithms.push(digest.algorithm());
                     }
@@ -2778,18 +2846,20 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                     algorithms
                 };
 
-                let (hashes, size) = self
-                    .download_archive(response, source, ext, entry.path(), &algorithms)
+                let (computed_hashes, size) = self
+                    .download_archive(response, source, ext, entry.path(), &algorithms, hashes)
                     .await?;
                 for existing in revision.hashes() {
-                    if !hashes.contains(existing) {
+                    if !computed_hashes.contains(existing) {
                         return Err(Error::CacheHeal(source.to_string(), existing.algorithm()));
                     }
                 }
-                Ok(revision
+                let revision = revision
                     .clone()
-                    .with_hashes(HashDigests::from(hashes))
-                    .with_size(size))
+                    .with_hashes(HashDigests::from(computed_hashes))
+                    .with_size(size);
+                hashes.validate(source, &revision)?;
+                Ok(revision)
             }
             .boxed_local()
             .instrument(info_span!("download", source_dist = %source))
@@ -2821,6 +2891,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         ext: SourceDistExtension,
         target: &Path,
         algorithms: &[HashAlgorithm],
+        policy: SourceHashPolicy<'_>,
     ) -> Result<(Vec<HashDigest>, u64), Error> {
         let temp_dir = tempfile::tempdir_in(
             self.build_context
@@ -2872,7 +2943,11 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         }
 
         let size = hasher.bytes_read();
-        let hashes = hashers.into_iter().map(HashDigest::from).collect();
+        let hashes = hashers
+            .into_iter()
+            .map(HashDigest::from)
+            .collect::<Vec<_>>();
+        policy.validate_artifact(source, &hashes)?;
 
         // Extract the top-level directory.
         let extracted = match uv_extract::strip_component(temp_dir.path()) {
@@ -3759,4 +3834,40 @@ fn read_wheel_metadata(
     let dist_info = read_archive_metadata(filename, reader)
         .map_err(|err| Error::WheelMetadata(wheel.to_path_buf(), Box::new(err)))?;
     Ok(ResolutionMetadata::parse_metadata(&dist_info)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn proxy_source_hash_policy_preserves_validation_algorithms()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let validation = HashDigests::from(vec![
+            "sha512:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                .parse()?,
+        ]);
+        let hashes = SourceHashPolicy::new(HashPolicy::None, Some(&validation));
+
+        assert_eq!(
+            hashes.http_algorithms(),
+            vec![HashAlgorithm::Sha256, HashAlgorithm::Sha512]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn proxy_source_hash_policy_rejects_wrong_cached_digest()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let validation = HashDigests::from(vec![
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".parse()?,
+        ]);
+        let cached_hashes = vec![
+            "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".parse()?,
+        ];
+        let hashes = SourceHashPolicy::new(HashPolicy::None, Some(&validation));
+
+        assert!(!hashes.admits_cached_revision(&cached_hashes));
+        Ok(())
+    }
 }
