@@ -276,6 +276,40 @@ impl IndexLocations {
         }
     }
 
+    /// Return every explicitly configured package index in declaration order.
+    ///
+    /// Unlike the resolution-facing iterators, this includes proxy indexes. Index names use the
+    /// normal first-definition-wins precedence, so shadowed definitions do not introduce routes.
+    pub(crate) fn configured_indexes(&self) -> impl Iterator<Item = &Index> {
+        let enabled = !self.no_index;
+        let mut seen = FxHashSet::default();
+        self.indexes
+            .iter()
+            .filter(move |_| enabled)
+            .filter(move |index| index.name.as_ref().is_none_or(|name| seen.insert(name)))
+    }
+
+    /// Return the configured proxy indexes in declaration order.
+    ///
+    /// Proxy indexes are excluded from dependency resolution and are used only to derive the
+    /// physical routes and authentication configuration of their canonical indexes.
+    pub fn proxy_indexes(&self) -> impl Iterator<Item = &Index> {
+        self.configured_indexes()
+            .filter(|index| index.proxy_for.is_some())
+    }
+
+    /// Return all configured proxy indexes, including shadowed definitions.
+    ///
+    /// Lower-priority definitions may contain credentials omitted from a stored higher-priority
+    /// index. Use this iterator only to register credentials, not to derive package routes.
+    pub fn all_proxy_indexes(&self) -> impl DoubleEndedIterator<Item = &Index> {
+        let enabled = !self.no_index;
+        self.indexes
+            .iter()
+            .filter(move |_| enabled)
+            .filter(|index| index.proxy_for.is_some())
+    }
+
     /// Combine a set of index locations.
     ///
     /// If either the current or the other index locations have `no_index` set, the result will
@@ -305,14 +339,6 @@ fn is_same_index(a: &IndexUrl, b: &IndexUrl) -> bool {
 }
 
 impl<'a> IndexLocations {
-    /// Return configured indexes in definition order, keeping the first index for each name.
-    fn configured_indexes(&'a self) -> impl Iterator<Item = &'a Index> + 'a {
-        let mut seen = FxHashSet::default();
-        self.indexes
-            .iter()
-            .filter(move |index| index.name.as_ref().is_none_or(|name| seen.insert(name)))
-    }
-
     /// Return the default [`Index`] entry.
     ///
     /// If `--no-index` is set, return `None`.
@@ -323,6 +349,7 @@ impl<'a> IndexLocations {
             None
         } else {
             self.configured_indexes()
+                .filter(|index| index.proxy_for.is_none())
                 .find(|index| index.default)
                 .or_else(|| Some(&DEFAULT_INDEX))
         }
@@ -337,6 +364,7 @@ impl<'a> IndexLocations {
         } else {
             Either::Right(
                 self.configured_indexes()
+                    .filter(|index| index.proxy_for.is_none())
                     .filter(|index| !index.default && !index.explicit),
             )
         }
@@ -349,7 +377,11 @@ impl<'a> IndexLocations {
         if self.no_index {
             Either::Left(std::iter::empty())
         } else {
-            Either::Right(self.configured_indexes().filter(|index| index.explicit))
+            Either::Right(
+                self.configured_indexes()
+                    .filter(|index| index.proxy_for.is_none())
+                    .filter(|index| index.explicit),
+            )
         }
     }
 
@@ -383,13 +415,18 @@ impl<'a> IndexLocations {
         if self.no_index {
             Either::Left(std::iter::empty())
         } else {
-            Either::Right(self.configured_indexes())
+            Either::Right(
+                self.configured_indexes()
+                    .filter(|index| index.proxy_for.is_none()),
+            )
         }
     }
 
     /// Return an iterator over the [`FlatIndexLocation`] entries.
     pub fn flat_indexes(&'a self) -> impl Iterator<Item = &'a Index> + 'a {
-        self.flat_index.iter()
+        self.flat_index
+            .iter()
+            .filter(|index| index.proxy_for.is_none())
     }
 
     /// Return the `--no-index` flag.
@@ -405,16 +442,24 @@ impl<'a> IndexLocations {
     /// that the last-defined index is the first item in the vector.
     pub fn allowed_indexes(&'a self) -> Vec<&'a Index> {
         if self.no_index {
-            self.flat_index.iter().rev().collect()
+            self.flat_index
+                .iter()
+                .rev()
+                .filter(|index| index.proxy_for.is_none())
+                .collect()
         } else {
             let mut indexes = vec![];
 
             let mut seen = FxHashSet::default();
             let mut default = false;
             for index in {
-                self.indexes
-                    .iter()
-                    .chain(self.flat_index.iter())
+                self.configured_indexes()
+                    .filter(|index| index.proxy_for.is_none())
+                    .chain(
+                        self.flat_index
+                            .iter()
+                            .filter(|index| index.proxy_for.is_none()),
+                    )
                     .filter(move |index| index.name.as_ref().is_none_or(|name| seen.insert(name)))
             } {
                 if index.default {
@@ -444,12 +489,27 @@ impl<'a> IndexLocations {
     /// that the last-defined index is the first item in the vector.
     pub fn known_indexes(&'a self) -> impl Iterator<Item = &'a Index> {
         if self.no_index {
-            Either::Left(self.flat_index.iter().rev())
+            Either::Left(
+                self.flat_index
+                    .iter()
+                    .rev()
+                    .filter(|index| index.proxy_for.is_none()),
+            )
         } else {
             Either::Right(
                 std::iter::once(&*DEFAULT_INDEX)
-                    .chain(self.flat_index.iter().rev())
-                    .chain(self.indexes.iter().rev()),
+                    .chain(
+                        self.flat_index
+                            .iter()
+                            .rev()
+                            .filter(|index| index.proxy_for.is_none()),
+                    )
+                    .chain(
+                        self.indexes
+                            .iter()
+                            .rev()
+                            .filter(|index| index.proxy_for.is_none()),
+                    ),
             )
         }
     }
@@ -470,6 +530,7 @@ impl<'a> IndexLocations {
 
         let (non_default, default) = self
             .configured_indexes()
+            .filter(|index| index.proxy_for.is_none())
             .partition::<Vec<_>, _>(|index| !index.default);
 
         Either::Right(non_default.into_iter().chain(default))
@@ -633,6 +694,141 @@ mod tests {
             .collect()
     }
 
+    fn configured_proxy_index(
+        name: &str,
+        simple_url: &str,
+        artifact_base_url: &str,
+    ) -> Result<Index, Box<dyn Error>> {
+        let mut index = Index::from_extra_index_url(IndexUrl::from_str(simple_url)?);
+        index.name = Some(IndexName::from_str(name)?);
+        index.artifact_base_url = Some(DisplaySafeUrl::parse(artifact_base_url)?);
+        index.proxy_for = Some(IndexName::from_str("pypi")?);
+        Ok(index)
+    }
+
+    #[test]
+    fn proxy_indexes_are_excluded_from_resolution_iterators() -> Result<(), Box<dyn Error>> {
+        let proxy = configured_proxy_index(
+            "socket",
+            "https://proxy.example.com/simple/",
+            "https://proxy.example.com/files/",
+        )?;
+        let physical_url = proxy.url.clone();
+        let locations = IndexLocations::new(vec![proxy], Vec::new(), false);
+
+        assert_eq!(locations.configured_indexes().count(), 1);
+        assert_eq!(locations.proxy_indexes().count(), 1);
+        assert_eq!(locations.all_proxy_indexes().count(), 1);
+        assert_eq!(
+            locations.default_index().map(Index::raw_url),
+            Some(&*PYPI_URL)
+        );
+        assert!(locations.indexes().all(|index| index.url != physical_url));
+        assert!(
+            locations
+                .fetch_indexes()
+                .all(|index| index.url != physical_url)
+        );
+        assert!(
+            locations
+                .simple_indexes()
+                .all(|index| index.url != physical_url)
+        );
+        assert!(
+            locations
+                .explicit_indexes()
+                .all(|index| index.url != physical_url)
+        );
+        assert!(
+            locations
+                .implicit_indexes()
+                .all(|index| index.url != physical_url)
+        );
+        assert!(
+            locations
+                .defined_indexes()
+                .all(|index| index.url != physical_url)
+        );
+        assert!(
+            locations
+                .known_indexes()
+                .all(|index| index.url != physical_url)
+        );
+        assert!(
+            locations
+                .allowed_indexes()
+                .iter()
+                .all(|index| index.url != physical_url)
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn no_index_suppresses_all_proxy_configuration() -> Result<(), Box<dyn Error>> {
+        let proxy = configured_proxy_index(
+            "socket",
+            "https://proxy.example.com/simple/",
+            "https://proxy.example.com/files/",
+        )?;
+        let locations = IndexLocations::new(vec![proxy], Vec::new(), true);
+
+        assert!(locations.default_index().is_none());
+        assert_eq!(locations.configured_indexes().count(), 0);
+        assert_eq!(locations.proxy_indexes().count(), 0);
+        assert_eq!(locations.all_proxy_indexes().count(), 0);
+        assert_eq!(locations.indexes().count(), 0);
+        assert_eq!(locations.fetch_indexes().count(), 0);
+        assert_eq!(locations.simple_indexes().count(), 0);
+        assert!(locations.allowed_indexes().is_empty());
+
+        Ok(())
+    }
+
+    #[test]
+    fn shadowed_proxy_credentials_remain_available_for_authentication() -> Result<(), Box<dyn Error>>
+    {
+        let active = configured_proxy_index(
+            "socket",
+            "https://proxy.example.com/simple/",
+            "https://proxy.example.com/files/",
+        )?;
+        let shadowed = configured_proxy_index(
+            "socket",
+            "https://user:secret@proxy.example.com/simple/",
+            "https://artifact-user:artifact-secret@proxy.example.com/files/",
+        )?;
+        let locations = IndexLocations::new(vec![active, shadowed], Vec::new(), false);
+
+        assert_eq!(locations.configured_indexes().count(), 1);
+        assert_eq!(locations.proxy_indexes().count(), 1);
+        assert_eq!(locations.all_proxy_indexes().count(), 2);
+        assert_eq!(
+            locations
+                .proxy_indexes()
+                .next()
+                .map(|index| index.url.url().username()),
+            Some("")
+        );
+        assert_eq!(
+            locations
+                .all_proxy_indexes()
+                .next_back()
+                .map(|index| index.url.url().username()),
+            Some("user")
+        );
+        assert_eq!(
+            locations
+                .all_proxy_indexes()
+                .next_back()
+                .and_then(|index| index.artifact_base_url.as_ref())
+                .map(|url| url.username()),
+            Some("artifact-user")
+        );
+
+        Ok(())
+    }
+
     #[test]
     fn test_index_url_parse_valid_paths() {
         // Absolute path
@@ -793,6 +989,8 @@ mod tests {
             Index {
                 name: Some(IndexName::from_str("index1").unwrap()),
                 url: IndexUrl::from_str("https://index1.example.com/simple").unwrap(),
+                artifact_base_url: None,
+                proxy_for: None,
                 cache_control: Some(crate::IndexCacheControl {
                     api: Some(HeaderValue::from_static("max-age=300")),
                     files: Some(HeaderValue::from_static("max-age=1800")),
@@ -810,6 +1008,8 @@ mod tests {
             Index {
                 name: Some(IndexName::from_str("index2").unwrap()),
                 url: IndexUrl::from_str("https://index2.example.com/simple").unwrap(),
+                artifact_base_url: None,
+                proxy_for: None,
                 cache_control: None,
                 explicit: false,
                 default: false,
@@ -850,6 +1050,8 @@ mod tests {
         let indexes = vec![Index {
             name: Some(IndexName::from_str("pytorch").unwrap()),
             url: IndexUrl::from_str("https://download.pytorch.org/whl/cu118").unwrap(),
+            artifact_base_url: None,
+            proxy_for: None,
             cache_control: None, // No explicit cache control
             explicit: false,
             default: false,
@@ -884,6 +1086,8 @@ mod tests {
         let indexes = vec![Index {
             name: Some(IndexName::from_str("pytorch").unwrap()),
             url: IndexUrl::from_str("https://download.pytorch.org/whl/cu118").unwrap(),
+            artifact_base_url: None,
+            proxy_for: None,
             cache_control: Some(IndexCacheControl {
                 api: Some(HeaderValue::from_static("no-cache")),
                 files: Some(HeaderValue::from_static("max-age=3600")),
@@ -919,6 +1123,8 @@ mod tests {
         let indexes = vec![Index {
             name: Some(IndexName::from_str("nvidia").unwrap()),
             url: IndexUrl::from_str("https://pypi.nvidia.com").unwrap(),
+            artifact_base_url: None,
+            proxy_for: None,
             cache_control: None, // No explicit cache control
             explicit: false,
             default: false,

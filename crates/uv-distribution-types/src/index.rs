@@ -1,3 +1,5 @@
+use std::borrow::Borrow;
+use std::fmt;
 use std::path::Path;
 use std::str::FromStr;
 
@@ -125,7 +127,7 @@ impl<'de> Deserialize<'de> for IndexCacheControl {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Clone, Serialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub struct Index {
@@ -147,6 +149,38 @@ pub struct Index {
     ///
     /// Expects to receive a URL (e.g., `https://pypi.org/simple`) or a local path.
     pub url: IndexUrl,
+    /// The URL prefix from which this index serves package files.
+    ///
+    /// When this index is proxied, uv uses its `artifact-base-url` and the proxy's
+    /// `artifact-base-url` to download packages without changing the URLs recorded in the
+    /// lockfile. PyPI defaults to `https://files.pythonhosted.org/packages/`.
+    ///
+    /// ```toml
+    /// [[tool.uv.index]]
+    /// name = "internal"
+    /// url = "https://internal.example.com/simple/"
+    /// artifact-base-url = "https://internal.example.com/packages/"
+    /// ```
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_artifact_base_url"
+    )]
+    pub artifact_base_url: Option<DisplaySafeUrl>,
+    /// The name of the original index that this index proxies.
+    ///
+    /// A proxy index downloads packages on behalf of the original index; it is not a separate
+    /// package source. Use `pypi` to proxy uv's default PyPI index.
+    ///
+    /// ```toml
+    /// [[tool.uv.index]]
+    /// name = "socket"
+    /// url = "https://proxy.example.com/simple/"
+    /// artifact-base-url = "https://proxy.example.com/files/"
+    /// proxy-for = "pypi"
+    /// ```
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy_for: Option<IndexName>,
     /// Mark the index as explicit.
     ///
     /// Explicit indexes will _only_ be used when explicitly requested via a `[tool.uv.sources]`
@@ -271,6 +305,31 @@ pub struct Index {
     pub exclude_newer: Option<ExcludeNewerOverride>,
 }
 
+impl fmt::Debug for Index {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut debug = formatter.debug_struct("Index");
+        debug.field("name", &self.name);
+        debug.field("url", &self.url);
+        if let Some(artifact_base_url) = &self.artifact_base_url {
+            debug.field("artifact_base_url", artifact_base_url);
+        }
+        if let Some(proxy_for) = &self.proxy_for {
+            debug.field("proxy_for", proxy_for);
+        }
+        debug.field("explicit", &self.explicit);
+        debug.field("default", &self.default);
+        debug.field("origin", &self.origin);
+        debug.field("format", &self.format);
+        debug.field("publish_url", &self.publish_url);
+        debug.field("authenticate", &self.authenticate);
+        debug.field("ignore_error_codes", &self.ignore_error_codes);
+        debug.field("cache_control", &self.cache_control);
+        debug.field("hash_algorithm", &self.hash_algorithm);
+        debug.field("exclude_newer", &self.exclude_newer);
+        debug.finish()
+    }
+}
+
 #[derive(Debug, Error)]
 #[error("Failed to parse credentials in index URL: {url}")]
 pub struct IndexCredentialsError {
@@ -284,6 +343,8 @@ impl PartialEq for Index {
         let Self {
             name,
             url,
+            artifact_base_url,
+            proxy_for,
             explicit,
             default,
             origin: _,
@@ -297,6 +358,8 @@ impl PartialEq for Index {
         } = self;
         *url == other.url
             && *name == other.name
+            && *artifact_base_url == other.artifact_base_url
+            && *proxy_for == other.proxy_for
             && *explicit == other.explicit
             && *default == other.default
             && *format == other.format
@@ -322,6 +385,8 @@ impl Ord for Index {
         let Self {
             name,
             url,
+            artifact_base_url,
+            proxy_for,
             explicit,
             default,
             origin: _,
@@ -335,6 +400,8 @@ impl Ord for Index {
         } = self;
         url.cmp(&other.url)
             .then_with(|| name.cmp(&other.name))
+            .then_with(|| artifact_base_url.cmp(&other.artifact_base_url))
+            .then_with(|| proxy_for.cmp(&other.proxy_for))
             .then_with(|| explicit.cmp(&other.explicit))
             .then_with(|| default.cmp(&other.default))
             .then_with(|| format.cmp(&other.format))
@@ -352,6 +419,8 @@ impl std::hash::Hash for Index {
         let Self {
             name,
             url,
+            artifact_base_url,
+            proxy_for,
             explicit,
             default,
             origin: _,
@@ -365,6 +434,8 @@ impl std::hash::Hash for Index {
         } = self;
         url.hash(state);
         name.hash(state);
+        artifact_base_url.hash(state);
+        proxy_for.hash(state);
         explicit.hash(state);
         default.hash(state);
         format.hash(state);
@@ -432,6 +503,8 @@ impl Index {
         Self {
             url,
             name: None,
+            artifact_base_url: None,
+            proxy_for: None,
             explicit: false,
             default: true,
             origin: None,
@@ -450,6 +523,8 @@ impl Index {
         Self {
             url,
             name: None,
+            artifact_base_url: None,
+            proxy_for: None,
             explicit: false,
             default: false,
             origin: None,
@@ -468,6 +543,8 @@ impl Index {
         Self {
             url,
             name: None,
+            artifact_base_url: None,
+            proxy_for: None,
             explicit: false,
             default: false,
             origin: None,
@@ -607,6 +684,8 @@ impl From<IndexUrl> for Index {
         Self {
             name: None,
             url: value,
+            artifact_base_url: None,
+            proxy_for: None,
             explicit: false,
             default: false,
             origin: None,
@@ -634,6 +713,8 @@ impl FromStr for Index {
             return Ok(Self {
                 name: Some(name),
                 url,
+                artifact_base_url: None,
+                proxy_for: None,
                 explicit: false,
                 default: false,
                 origin: None,
@@ -652,6 +733,8 @@ impl FromStr for Index {
         Ok(Self {
             name: None,
             url,
+            artifact_base_url: None,
+            proxy_for: None,
             explicit: false,
             default: false,
             origin: None,
@@ -740,6 +823,10 @@ impl<'a> From<&'a IndexUrl> for IndexMetadataRef<'a> {
 struct IndexWire {
     name: Option<IndexName>,
     url: IndexUrl,
+    #[serde(default, deserialize_with = "deserialize_artifact_base_url")]
+    artifact_base_url: Option<DisplaySafeUrl>,
+    #[serde(default)]
+    proxy_for: Option<IndexName>,
     #[serde(default)]
     explicit: bool,
     #[serde(default)]
@@ -759,6 +846,33 @@ struct IndexWire {
     exclude_newer: Option<ExcludeNewerOverride>,
 }
 
+fn serialize_artifact_base_url<T, S>(artifact_base_url: T, serializer: S) -> Result<S::Ok, S::Error>
+where
+    T: Borrow<Option<DisplaySafeUrl>>,
+    S: Serializer,
+{
+    artifact_base_url
+        .borrow()
+        .as_ref()
+        .map(DisplaySafeUrl::without_credentials)
+        .serialize(serializer)
+}
+
+fn deserialize_artifact_base_url<'de, D>(
+    deserializer: D,
+) -> Result<Option<DisplaySafeUrl>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer)?
+        .map(|value| {
+            let url = DisplaySafeUrl::parse(&value).map_err(serde::de::Error::custom)?;
+            crate::proxy_index::validate_raw_prefix(&value).map_err(serde::de::Error::custom)?;
+            Ok(url)
+        })
+        .transpose()
+}
+
 impl<'de> Deserialize<'de> for Index {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -776,6 +890,8 @@ impl<'de> Deserialize<'de> for Index {
         Ok(Self {
             name: wire.name,
             url: wire.url,
+            artifact_base_url: wire.artifact_base_url,
+            proxy_for: wire.proxy_for,
             explicit: wire.explicit,
             default: wire.default,
             origin: None,
@@ -805,6 +921,139 @@ pub enum IndexSourceError {
 mod tests {
     use super::*;
     use http::HeaderValue;
+
+    #[test]
+    fn test_ordinary_index_serialization_omits_proxy_configuration()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let index = Index::from_index_url(IndexUrl::from_str("https://index.example.com/simple/")?);
+        let serialized: toml::Table = toml::from_str(&toml::to_string(&index)?)?;
+
+        assert!(!serialized.contains_key("artifact-base-url"));
+        assert!(!serialized.contains_key("proxy-for"));
+        let debug = format!("{index:?}");
+        assert!(!debug.contains("artifact_base_url"));
+        assert!(!debug.contains("proxy_for"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_proxy_index_serialization_redacts_artifact_credentials()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let index: Index = toml::from_str(
+            r#"
+            name = "socket"
+            url = "https://simple-user:simple-secret@proxy.example.com/simple/"
+            artifact-base-url = "https://artifact-user:artifact-secret@proxy.example.com/files/"
+            proxy-for = "pypi"
+            "#,
+        )?;
+
+        assert_eq!(index.name.as_deref(), Some("socket"));
+        assert_eq!(index.proxy_for.as_deref(), Some("pypi"));
+        assert_eq!(index.url.url().username(), "simple-user");
+        assert_eq!(index.url.url().password(), Some("simple-secret"));
+        assert_eq!(
+            index.artifact_base_url.as_ref().map(|url| url.username()),
+            Some("artifact-user")
+        );
+        assert_eq!(
+            index
+                .artifact_base_url
+                .as_ref()
+                .and_then(|url| url.password()),
+            Some("artifact-secret")
+        );
+
+        let serialized = toml::to_string(&index)?;
+        let values: toml::Table = toml::from_str(&serialized)?;
+
+        assert_eq!(
+            values.get("url").and_then(toml::Value::as_str),
+            Some("https://proxy.example.com/simple/")
+        );
+        assert_eq!(
+            values
+                .get("artifact-base-url")
+                .and_then(toml::Value::as_str),
+            Some("https://proxy.example.com/files/")
+        );
+        assert!(!serialized.contains("simple-secret"));
+        assert!(!serialized.contains("artifact-secret"));
+
+        let debug = format!("{index:?}");
+        assert!(debug.contains("artifact_base_url"));
+        assert!(debug.contains("proxy_for"));
+        assert!(!debug.contains("simple-secret"));
+        assert!(!debug.contains("artifact-secret"));
+
+        let restored: Index = toml::from_str(&serialized)?;
+        assert_eq!(restored.name.as_deref(), Some("socket"));
+        assert_eq!(restored.proxy_for.as_deref(), Some("pypi"));
+        assert!(restored.url.url().username().is_empty());
+        assert!(restored.url.url().password().is_none());
+        let Some(artifact_base) = restored.artifact_base_url else {
+            return Err("the redacted artifact base was not preserved".into());
+        };
+        assert!(artifact_base.username().is_empty());
+        assert!(artifact_base.password().is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_index_rejects_ambiguous_artifact_base_authority() {
+        let toml_result = toml::from_str::<Index>(
+            r#"
+            name = "socket"
+            url = "https://proxy.example.com/simple/"
+            artifact-base-url = "https://user/name:secret@proxy.example.com/files/"
+            proxy-for = "pypi"
+            "#,
+        );
+
+        assert!(toml_result.is_err());
+        if let Err(error) = toml_result {
+            assert!(!error.message().contains("secret"));
+        }
+
+        let json_result = serde_json::from_str::<Index>(
+            r#"{
+                "name": "socket",
+                "url": "https://proxy.example.com/simple/",
+                "artifact-base-url": "https://user/name:secret@proxy.example.com/files/",
+                "proxy-for": "pypi"
+            }"#,
+        );
+
+        assert!(json_result.is_err());
+        if let Err(error) = json_result {
+            assert!(!error.to_string().contains("secret"));
+        }
+    }
+
+    #[test]
+    fn test_index_rejects_unsafe_artifact_base_paths() {
+        for path in [
+            "../files/",
+            "./files/",
+            "%2e%2e/files/",
+            "%2e/files/",
+            "files%2fprivate/",
+            "files%2Fprivate/",
+            "files%5cprivate/",
+            "files%5Cprivate/",
+        ] {
+            let configuration = format!(
+                "name = \"socket\"\nurl = \"https://proxy.example.com/simple/\"\nartifact-base-url = \"https://proxy.example.com/{path}\"\nproxy-for = \"pypi\"\n"
+            );
+
+            assert!(
+                toml::from_str::<Index>(&configuration).is_err(),
+                "unsafe artifact base was accepted: {path}"
+            );
+        }
+    }
 
     #[test]
     fn test_index_cache_control_headers() {
